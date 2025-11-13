@@ -43,28 +43,30 @@ clean_choice_data <- function(raw_long) {
   raw_long %>%
     filter(alt %in% alt_levels) %>%
     mutate(
-      time = suppressWarnings(as.numeric(time)),
-      cost = suppressWarnings(as.numeric(cost)),
-      avail = if_else(is.na(avail), 0L, as.integer(avail)),
-      choice_flag = as.integer(choice),
+      time       = suppressWarnings(as.numeric(time)),
+      cost       = suppressWarnings(as.numeric(cost)),
+      avail      = if_else(is.na(avail), 0L, as.integer(avail)),
+      choice     = as.integer(choice),
       choice_num = as.integer(choice_num)
     ) %>%
-    select(-choice) %>%
-    filter(!is.na(time), !is.na(cost)) %>%
+    filter(!is.na(time), !is.na(cost), !is.na(choice_num)) %>%
     group_by(ID, choice_id) %>%
-    filter(sum(choice_flag, na.rm = TRUE) == 1L) %>%
+    filter(sum(choice, na.rm = TRUE) == 1L) %>%
     ungroup()
 }
 
 attach_choices <- function(database) {
   choice_lookup <- database %>%
-    filter(choice_flag == 1L) %>%
-    transmute(ID, choice_id, choice = match(alt, alt_levels))
+    filter(choice == 1L) %>%
+    transmute(ID, choice_id, chosen_alt = match(alt, alt_levels))
 
   database %>%
     left_join(choice_lookup, by = c("ID", "choice_id")) %>%
-    mutate(choice = as.integer(choice)) %>%
-    filter(!is.na(choice))
+    mutate(
+      chosen_alt = as.integer(chosen_alt),
+      choice_num = if_else(is.na(choice_num), chosen_alt, choice_num),
+      choice_num = as.integer(choice_num)
+    )
 }
 
 add_availability_and_scaling <- function(database) {
@@ -117,6 +119,56 @@ format_summary_table <- function(model) {
   } else {
     "(Estimation table unavailable)"
   }
+}
+
+save_mmnl_summary <- function(model, scale_info, output_dir) {
+  apollo_modelOutput(model)
+  apollo_saveOutput(model)
+
+  diag_lines <- list()
+  diag_lines[["timestamp"]] <- paste("Timestamp:", format(Sys.time(), tz = "UTC"))
+  ll_start <- model$LLStart %||% model$LL0 %||% NA
+  diag_lines[["ll_start"]] <- paste("Initial log-likelihood:", signif(ll_start, 6))
+  diag_lines[["final_ll"]] <- paste("Final log-likelihood:", signif(model$maximum, 6))
+  grad_norm <- if (!is.null(model$grad)) sqrt(sum(model$grad^2)) else NA
+  diag_lines[["grad_norm"]] <- paste("Gradient 2-norm:", signif(grad_norm, 6))
+
+  hessian_pd <- NA
+  eig_text <- "N/A"
+  if (!is.null(model$hessian)) {
+    eig_vals <- tryCatch(
+      eigen(-model$hessian, symmetric = TRUE, only.values = TRUE)$values,
+      error = function(e) NA_real_
+    )
+    if (all(is.finite(eig_vals))) {
+      hessian_pd <- all(eig_vals > 0)
+      eig_text <- paste(signif(head(eig_vals, 10), 6), collapse = ", ")
+    }
+  }
+  diag_lines[["hessian_def"]] <- paste("-H positive definite:", hessian_pd)
+  diag_lines[["eigenvalues"]] <- paste("Leading eigenvalues(-H):", eig_text)
+
+  coef_table <- format_summary_table(model)
+
+  scale_lines <- sprintf("%s (original): mean=%.4f sd=%.4f",
+                         c("time", "cost"),
+                         c(scale_info$time_mean, scale_info$cost_mean),
+                         c(scale_info$time_sd, scale_info$cost_sd))
+
+  summary_path <- file.path(output_dir, "MMNL_independent_summary.txt")
+  writeLines(c(
+    "MMNL Independent Model Summary",
+    "================================",
+    unlist(diag_lines, use.names = FALSE),
+    "",
+    "Scaling information (original units):",
+    scale_lines,
+    "",
+    "Model output:",
+    coef_table
+  ), con = summary_path)
+
+  summary_path
 }
 
 build_apollo_components <- function(output_dir, draws) {
@@ -180,7 +232,7 @@ build_apollo_components <- function(output_dir, draws) {
         air  = av_air,
         rail = av_rail
       ),
-      choiceVar    = choice,
+      choiceVar    = choice_num,
       V            = V
     )
 
@@ -256,51 +308,7 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   )
 
   ## STEP 7 (continued) – Save Apollo output and custom diagnostics ----------
-  apollo_modelOutput(model)
-  apollo_saveOutput(model)
-
-  diag_lines <- list()
-  diag_lines[["timestamp"]] <- paste("Timestamp:", format(Sys.time(), tz = "UTC"))
-  ll_start <- model$LLStart %||% model$LL0 %||% NA
-  diag_lines[["ll_start"]] <- paste("Initial log-likelihood:", signif(ll_start, 6))
-  diag_lines[["final_ll"]] <- paste("Final log-likelihood:", signif(model$maximum, 6))
-  grad_norm <- if (!is.null(model$grad)) sqrt(sum(model$grad^2)) else NA
-  diag_lines[["grad_norm"]] <- paste("Gradient 2-norm:", signif(grad_norm, 6))
-
-  hessian_pd <- NA
-  eig_text <- "N/A"
-  if (!is.null(model$hessian)) {
-    eig_vals <- tryCatch(
-      eigen(-model$hessian, symmetric = TRUE, only.values = TRUE)$values,
-      error = function(e) NA_real_
-    )
-    if (all(is.finite(eig_vals))) {
-      hessian_pd <- all(eig_vals > 0)
-      eig_text <- paste(signif(head(eig_vals, 10), 6), collapse = ", ")
-    }
-  }
-  diag_lines[["hessian_def"]] <- paste("-H positive definite:", hessian_pd)
-  diag_lines[["eigenvalues"]] <- paste("Leading eigenvalues(-H):", eig_text)
-
-  coef_table <- format_summary_table(model)
-
-  scale_lines <- sprintf("%s (original): mean=%.4f sd=%.4f",
-                         c("time", "cost"),
-                         c(scale_info$time_mean, scale_info$cost_mean),
-                         c(scale_info$time_sd, scale_info$cost_sd))
-
-  summary_path <- file.path(output_dir, "MMNL_independent_summary.txt")
-  writeLines(c(
-    "MMNL Independent Model Summary",
-    "================================",
-    unlist(diag_lines, use.names = FALSE),
-    "",
-    "Scaling information (original units):",
-    scale_lines,
-    "",
-    "Model output:",
-    coef_table
-  ), con = summary_path)
+  summary_path <- save_mmnl_summary(model, scale_info, output_dir)
 
   invisible(list(model = model, scale_info = scale_info, summary_path = summary_path))
 }
