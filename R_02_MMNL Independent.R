@@ -3,11 +3,9 @@
 # R_02_MMNL_Independent.R
 # ------------------------------------------------------------
 # Mixed logit model with independent random coefficients.
-# - Cleans and validates the processed long-format data
-# - Scales continuous variables
-# - Estimates an MMNL model with Halton/Sobol draws
-# - Provides diagnostics (log-likelihood, gradient norm,
-#   Hessian definiteness) and saves a concise summary
+# - Validates and scales the processed long-format data
+# - Estimates an MMNL model with Sobol draws and lognormal RCs
+# - Saves Apollo output along with gradient/Hessian diagnostics
 ##############################################################
 
 ## STEP 0 – Load required packages and helper functions --------------------
@@ -19,7 +17,105 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-`%||%` <- function(x, y) if (is.null(x) || is.na(x)) y else x
+`%||%` <- function(x, y) if (is.null(x) || anyNA(x)) y else x
+
+required_columns <- c("ID", "choice_id", "alt", "time", "cost", "avail",
+                      "choice", "choice_num")
+
+alt_levels <- c("car", "bus", "air", "rail")
+
+load_processed_long <- function(path) {
+  if (!file.exists(path)) {
+    stop(sprintf("Processed file not found at '%s'. Please run the data processing script first.",
+                 path))
+  }
+
+  data <- read_csv(path, show_col_types = FALSE)
+  missing_cols <- setdiff(required_columns, names(data))
+  if (length(missing_cols) > 0) {
+    stop(sprintf("Processed data is missing required columns: %s",
+                 paste(missing_cols, collapse = ", ")))
+  }
+  data
+}
+
+clean_choice_data <- function(raw_long) {
+  raw_long %>%
+    filter(alt %in% alt_levels) %>%
+    mutate(
+      time = suppressWarnings(as.numeric(time)),
+      cost = suppressWarnings(as.numeric(cost)),
+      avail = if_else(is.na(avail), 0L, as.integer(avail)),
+      choice_flag = as.integer(choice),
+      choice_num = as.integer(choice_num)
+    ) %>%
+    filter(!is.na(time), !is.na(cost)) %>%
+    group_by(ID, choice_id) %>%
+    filter(sum(choice_flag, na.rm = TRUE) == 1L) %>%
+    ungroup()
+}
+
+attach_choices <- function(database) {
+  choice_lookup <- database %>%
+    filter(choice_flag == 1L) %>%
+    transmute(ID, choice_id, choice = match(alt, alt_levels))
+
+  database %>%
+    left_join(choice_lookup, by = c("ID", "choice_id")) %>%
+    filter(!is.na(choice))
+}
+
+add_availability_and_scaling <- function(database) {
+  availability_wide <- database %>%
+    select(ID, choice_id, alt, avail) %>%
+    distinct() %>%
+    pivot_wider(names_from = alt, values_from = avail, names_prefix = "av_")
+
+  database <- database %>%
+    left_join(availability_wide, by = c("ID", "choice_id")) %>%
+    mutate(across(starts_with("av_"), ~ replace_na(as.integer(.x), 0L)))
+
+  scale_stats <- database %>%
+    filter(avail == 1L) %>%
+    summarise(
+      time_mean = mean(time),
+      time_sd   = sd(time),
+      cost_mean = mean(cost),
+      cost_sd   = sd(cost)
+    )
+
+  time_mean <- scale_stats$time_mean %||% 0
+  time_sd <- scale_stats$time_sd
+  if (is.null(time_sd) || is.na(time_sd) || !is.finite(time_sd) || time_sd == 0) time_sd <- 1
+
+  cost_mean <- scale_stats$cost_mean %||% 0
+  cost_sd <- scale_stats$cost_sd
+  if (is.null(cost_sd) || is.na(cost_sd) || !is.finite(cost_sd) || cost_sd == 0) cost_sd <- 1
+
+  scale_info <- list(
+    time_mean = time_mean,
+    time_sd   = time_sd,
+    cost_mean = cost_mean,
+    cost_sd   = cost_sd
+  )
+
+  database <- database %>%
+    mutate(
+      time_sc = (time - time_mean) / time_sd,
+      cost_sc = (cost - cost_mean) / cost_sd
+    ) %>%
+    arrange(ID, choice_id, factor(alt, levels = alt_levels))
+
+  list(database = database, scale_info = scale_info)
+}
+
+format_summary_table <- function(model) {
+  if (!is.null(model$estimate)) {
+    capture.output(print(model$estimate))
+  } else {
+    "(Estimation table unavailable)"
+  }
+}
 
 mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
                        output_dir = "output",
@@ -34,90 +130,19 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   }
 
   ## STEP 2 – Load processed LONG data and validate structure --------------
-  if (!file.exists(processed_path)) {
-    stop(sprintf("Processed file not found at '%s'. Please run the data processing script first.",
-                 processed_path))
-  }
-
-  raw_long <- read_csv(processed_path, show_col_types = FALSE)
-
-  required_cols <- c("ID", "choice_id", "alt", "time", "cost", "avail",
-                     "choice", "choice_num")
-  missing_cols <- setdiff(required_cols, names(raw_long))
-  if (length(missing_cols) > 0) {
-    stop(sprintf("Processed data is missing required columns: %s",
-                 paste(missing_cols, collapse = ", ")))
-  }
+  raw_long <- load_processed_long(processed_path)
 
   ## STEP 3 – Clean and filter choice situations ---------------------------
-  alt_levels <- c("car", "bus", "air", "rail")
   database <- raw_long %>%
-    filter(.data$alt %in% alt_levels) %>%
-    mutate(
-      time = suppressWarnings(as.numeric(.data$time)),
-      cost = suppressWarnings(as.numeric(.data$cost)),
-      avail = if_else(is.na(.data$avail), 0L, as.integer(.data$avail)),
-      choice_flag = as.integer(.data$choice),
-      choice_num = as.integer(.data$choice_num)
-    ) %>%
-    filter(!is.na(.data$time), !is.na(.data$cost)) %>%
-    group_by(.data$ID, .data$choice_id) %>%
-    filter(sum(.data$choice_flag, na.rm = TRUE) == 1L) %>%
-    ungroup()
+    clean_choice_data() %>%
+    attach_choices()
 
-  choice_lookup <- database %>%
-    filter(.data$choice_flag == 1L) %>%
-    transmute(ID = .data$ID, choice_id = .data$choice_id,
-              chosen_alt = match(.data$alt, alt_levels))
+  ## STEP 4 – Build availability flags and scaling information -------------
+  prepared <- add_availability_and_scaling(database)
+  database <- prepared$database
+  scale_info <- prepared$scale_info
 
-  database <- database %>%
-    left_join(choice_lookup, by = c("ID", "choice_id")) %>%
-    mutate(choice = as.integer(.data$chosen_alt)) %>%
-    filter(!is.na(.data$choice))
-
-  ## STEP 4 – Build availability and scaling information -------------------
-  availability_wide <- database %>%
-    select(.data$ID, .data$choice_id, .data$alt, .data$avail) %>%
-    distinct() %>%
-    pivot_wider(names_from = .data$alt, values_from = .data$avail,
-                names_prefix = "av_")
-
-  database <- database %>%
-    left_join(availability_wide, by = c("ID", "choice_id")) %>%
-    mutate(across(starts_with("av_"), ~ replace_na(as.integer(.), 0L)))
-
-  scale_stats <- database %>%
-    filter(.data$avail == 1L) %>%
-    summarise(
-      time_mean = mean(.data$time),
-      time_sd   = sd(.data$time),
-      cost_mean = mean(.data$cost),
-      cost_sd   = sd(.data$cost)
-    )
-
-  time_mean <- scale_stats$time_mean %||% 0
-  time_sd   <- scale_stats$time_sd
-  if (is.null(time_sd) || is.na(time_sd) || time_sd == 0) time_sd <- 1
-  cost_mean <- scale_stats$cost_mean %||% 0
-  cost_sd   <- scale_stats$cost_sd
-  if (is.null(cost_sd) || is.na(cost_sd) || cost_sd == 0) cost_sd <- 1
-
-  database <- database %>%
-    mutate(
-      time_sc = (.data$time - time_mean) / time_sd,
-      cost_sc = (.data$cost - cost_mean) / cost_sd
-    ) %>%
-    arrange(.data$ID, .data$choice_id,
-            factor(.data$alt, levels = alt_levels))
-
-  scale_info <- list(
-    time_mean = time_mean,
-    time_sd = time_sd,
-    cost_mean = cost_mean,
-    cost_sd = cost_sd
-  )
-
-  ## STEP 5 – Configure apollo_control and simulation draws ----------------
+  ## STEP 5 – Configure apollo_control and simulation draws -----------------
   apollo_control <- list(
     modelName       = "MMNL_independent_scaled",
     modelDescr      = "MMNL with scaled time/cost and lognormal RC",
@@ -127,7 +152,9 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
     nCores          = {
       if (requireNamespace("parallel", quietly = TRUE)) {
         max(1L, min(4L, parallel::detectCores() - 1L))
-      } else 1L
+      } else {
+        1L
+      }
     },
     outputDirectory = output_dir
   )
@@ -139,7 +166,7 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
     interNormDraws = c("draws_time", "draws_cost")
   )
 
-  ## STEP 6 – Define parameters, random coefficients, and utilities --------
+  ## STEP 6 – Define parameters, random coefficients, and utilities ---------
   apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
     apollo_attach(apollo_beta, apollo_inputs)
     on.exit(apollo_detach(apollo_beta, apollo_inputs))
@@ -154,13 +181,13 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   }
 
   apollo_beta <- c(
-    asc_bus       = -0.3,
-    asc_air       = -0.1,
-    asc_rail      =  0.2,
-    mu_time       = log(1.0),
-    log_sigma_time= log(0.4),
-    mu_cost       = log(1.2),
-    log_sigma_cost= log(0.5)
+    asc_bus        = -0.3,
+    asc_air        = -0.1,
+    asc_rail       =  0.2,
+    mu_time        = log(1.0),
+    log_sigma_time = log(0.4),
+    mu_cost        = log(1.2),
+    log_sigma_cost = log(0.5)
   )
   apollo_fixed <- c()
 
@@ -168,7 +195,6 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
     apollo_attach(apollo_beta, apollo_inputs)
     on.exit(apollo_detach(apollo_beta, apollo_inputs))
 
-    ## STEP 6 (continued) – Construct utilities for each alternative --------
     V <- list()
     V[["car"]]  <- 0 +        b_time * (time_sc * (alt == "car"))  + b_cost * (cost_sc * (alt == "car"))
     V[["bus"]]  <- asc_bus +  b_time * (time_sc * (alt == "bus"))  + b_cost * (cost_sc * (alt == "bus"))
@@ -194,7 +220,7 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
     apollo_prepareProb(P, apollo_inputs, functionality)
   }
 
-  ## STEP 7 – Validate inputs and estimate MMNL model ----------------------
+  ## STEP 7 – Validate inputs and estimate MMNL model -----------------------
   apollo_inputs <- apollo_validateInputs(
     database        = database,
     apollo_control  = apollo_control,
@@ -205,7 +231,7 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
 
   model <- apollo_estimate(apollo_beta, apollo_fixed, apollo_probabilities, apollo_inputs)
 
-  ## STEP 7 (continued) – Save Apollo output and custom diagnostics ---------
+  ## STEP 7 (continued) – Save Apollo output and custom diagnostics ----------
   apollo_modelOutput(model)
   apollo_saveOutput(model)
 
@@ -214,7 +240,7 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   ll_start <- model$LLStart %||% model$LL0 %||% NA
   diag_lines[["ll_start"]] <- paste("Initial log-likelihood:", signif(ll_start, 6))
   diag_lines[["final_ll"]] <- paste("Final log-likelihood:", signif(model$maximum, 6))
-  grad_norm <- sqrt(sum(model$grad^2))
+  grad_norm <- if (!is.null(model$grad)) sqrt(sum(model$grad^2)) else NA
   diag_lines[["grad_norm"]] <- paste("Gradient 2-norm:", signif(grad_norm, 6))
 
   hessian_pd <- NA
@@ -222,7 +248,7 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   if (!is.null(model$hessian)) {
     eig_vals <- tryCatch(
       eigen(-model$hessian, symmetric = TRUE, only.values = TRUE)$values,
-      error = function(cond) NA
+      error = function(e) NA_real_
     )
     if (all(is.finite(eig_vals))) {
       hessian_pd <- all(eig_vals > 0)
@@ -232,7 +258,7 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   diag_lines[["hessian_def"]] <- paste("-H positive definite:", hessian_pd)
   diag_lines[["eigenvalues"]] <- paste("Leading eigenvalues(-H):", eig_text)
 
-  coef_table <- capture.output(apollo_modelOutput(model))
+  coef_table <- format_summary_table(model)
 
   scale_lines <- sprintf("%s (original): mean=%.4f sd=%.4f",
                          c("time", "cost"),
@@ -255,6 +281,6 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   invisible(list(model = model, scale_info = scale_info, summary_path = summary_path))
 }
 
-if (sys.nframe() == 0) {
-  mmnl_model()
+if (sys.nframe() == 0 && !isTRUE(getOption("mmnl.skip.autorun"))) {
+  invisible(mmnl_model())
 }

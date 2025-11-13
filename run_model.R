@@ -59,7 +59,11 @@ main <- function() {
 
   ## STEP 2.5 – Estimate the independent MMNL model
   message("==> Running MMNL estimation (R_02_MMNL Independent.R)")
+  autorun_old <- getOption("mmnl.skip.autorun")
+  on.exit(options(mmnl.skip.autorun = autorun_old), add = TRUE)
+  options(mmnl.skip.autorun = TRUE)
   source("R_02_MMNL Independent.R", local = FALSE)
+  options(mmnl.skip.autorun = autorun_old)
   results <- mmnl_model(
     processed_path = file.path("DATA", "processed", "modechoice_long.csv"),
     output_dir = "output"
