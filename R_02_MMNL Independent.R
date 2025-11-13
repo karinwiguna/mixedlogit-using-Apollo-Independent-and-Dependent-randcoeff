@@ -49,6 +49,7 @@ clean_choice_data <- function(raw_long) {
       choice_flag = as.integer(choice),
       choice_num = as.integer(choice_num)
     ) %>%
+    select(-choice) %>%
     filter(!is.na(time), !is.na(cost)) %>%
     group_by(ID, choice_id) %>%
     filter(sum(choice_flag, na.rm = TRUE) == 1L) %>%
@@ -62,6 +63,7 @@ attach_choices <- function(database) {
 
   database %>%
     left_join(choice_lookup, by = c("ID", "choice_id")) %>%
+    mutate(choice = as.integer(choice)) %>%
     filter(!is.na(choice))
 }
 
