@@ -119,6 +119,88 @@ format_summary_table <- function(model) {
   }
 }
 
+build_apollo_components <- function(output_dir, draws) {
+  apollo_control <- list(
+    modelName       = "MMNL_independent_scaled",
+    modelDescr      = "MMNL with scaled time/cost and lognormal RC",
+    indivID         = "ID",
+    panelData       = TRUE,
+    mixing          = TRUE,
+    nCores          = 1L,
+    outputDirectory = output_dir
+  )
+
+  apollo_draws <- list(
+    interDrawsType = "sobol",
+    interNDraws    = draws,
+    interUnifDraws = c(),
+    interNormDraws = c("draws_time", "draws_cost")
+  )
+
+  apollo_beta <- c(
+    asc_bus        = -0.3,
+    asc_air        = -0.1,
+    asc_rail       =  0.2,
+    mu_time        = log(1.0),
+    log_sigma_time = log(0.4),
+    mu_cost        = log(1.2),
+    log_sigma_cost = log(0.5)
+  )
+
+  apollo_fixed <- c()
+
+  apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
+    apollo_attach(apollo_beta, apollo_inputs)
+    on.exit(apollo_detach(apollo_beta, apollo_inputs), add = TRUE)
+
+    sigma_time <- exp(log_sigma_time)
+    sigma_cost <- exp(log_sigma_cost)
+
+    randcoeff <- list()
+    randcoeff[["b_time"]] <- -exp(mu_time + sigma_time * draws_time)
+    randcoeff[["b_cost"]] <- -exp(mu_cost + sigma_cost * draws_cost)
+    randcoeff
+  }
+
+  apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
+    apollo_attach(apollo_beta, apollo_inputs)
+    on.exit(apollo_detach(apollo_beta, apollo_inputs), add = TRUE)
+
+    V <- list()
+    V[["car"]]  <- 0 +        b_time * (time_sc * (alt == "car"))  + b_cost * (cost_sc * (alt == "car"))
+    V[["bus"]]  <- asc_bus +  b_time * (time_sc * (alt == "bus"))  + b_cost * (cost_sc * (alt == "bus"))
+    V[["air"]]  <- asc_air +  b_time * (time_sc * (alt == "air"))  + b_cost * (cost_sc * (alt == "air"))
+    V[["rail"]] <- asc_rail + b_time * (time_sc * (alt == "rail")) + b_cost * (cost_sc * (alt == "rail"))
+
+    mnl_settings <- list(
+      alternatives = setNames(seq_along(alt_levels), alt_levels),
+      avail        = list(
+        car  = av_car,
+        bus  = av_bus,
+        air  = av_air,
+        rail = av_rail
+      ),
+      choiceVar    = choice,
+      V            = V
+    )
+
+    P <- list()
+    P[["model"]] <- apollo_mnl(mnl_settings, functionality)
+    P <- apollo_panelProd(P, apollo_inputs, functionality)
+    P <- apollo_avgInterDraws(P, apollo_inputs, functionality)
+    return(apollo_prepareProb(P, apollo_inputs, functionality))
+  }
+
+  list(
+    control       = apollo_control,
+    draws         = apollo_draws,
+    beta          = apollo_beta,
+    fixed         = apollo_fixed,
+    randCoeff     = apollo_randCoeff,
+    probabilities = apollo_probabilities
+  )
+}
+
 mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
                        output_dir = "output",
                        draws = 1000,
@@ -145,82 +227,16 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
   scale_info <- prepared$scale_info
 
   ## STEP 5 – Configure apollo_control and simulation draws -----------------
-  apollo_control <- list(
-    modelName       = "MMNL_independent_scaled",
-    modelDescr      = "MMNL with scaled time/cost and lognormal RC",
-    indivID         = "ID",
-    panelData       = TRUE,
-    mixing          = TRUE,
-    nCores          = {
-      if (requireNamespace("parallel", quietly = TRUE)) {
-        max(1L, min(4L, parallel::detectCores() - 1L))
-      } else {
-        1L
-      }
-    },
-    outputDirectory = output_dir
-  )
-
-  apollo_draws <- list(
-    interDrawsType = "sobol",
-    interNDraws    = draws,
-    interUnifDraws = c(),
-    interNormDraws = c("draws_time", "draws_cost")
-  )
+  components <- build_apollo_components(output_dir, draws)
+  # The helper constructs all Apollo objects once so estimation runs in a single pass.
+  apollo_control <- components$control
+  apollo_draws   <- components$draws
 
   ## STEP 6 – Define parameters, random coefficients, and utilities ---------
-  apollo_randCoeff <- function(apollo_beta, apollo_inputs) {
-    apollo_attach(apollo_beta, apollo_inputs)
-    on.exit(apollo_detach(apollo_beta, apollo_inputs))
-
-    sd_time <- exp(log_sigma_time)
-    sd_cost <- exp(log_sigma_cost)
-
-    list(
-      b_time = -exp(mu_time + sd_time * draws_time),
-      b_cost = -exp(mu_cost + sd_cost * draws_cost)
-    )
-  }
-
-  apollo_beta <- c(
-    asc_bus        = -0.3,
-    asc_air        = -0.1,
-    asc_rail       =  0.2,
-    mu_time        = log(1.0),
-    log_sigma_time = log(0.4),
-    mu_cost        = log(1.2),
-    log_sigma_cost = log(0.5)
-  )
-  apollo_fixed <- c()
-
-  apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate") {
-    apollo_attach(apollo_beta, apollo_inputs)
-    on.exit(apollo_detach(apollo_beta, apollo_inputs))
-
-    V <- list()
-    V[["car"]]  <- 0 +        b_time * (time_sc * (alt == "car"))  + b_cost * (cost_sc * (alt == "car"))
-    V[["bus"]]  <- asc_bus +  b_time * (time_sc * (alt == "bus"))  + b_cost * (cost_sc * (alt == "bus"))
-    V[["air"]]  <- asc_air +  b_time * (time_sc * (alt == "air"))  + b_cost * (cost_sc * (alt == "air"))
-    V[["rail"]] <- asc_rail + b_time * (time_sc * (alt == "rail")) + b_cost * (cost_sc * (alt == "rail"))
-
-    mnl_settings <- list(
-      alternatives = setNames(seq_along(alt_levels), alt_levels),
-      avail        = list(
-        car  = av_car,
-        bus  = av_bus,
-        air  = av_air,
-        rail = av_rail
-      ),
-      choiceVar    = choice,
-      V            = V
-    )
-
-    P <- list()
-    P[["model"]] <- apollo_mnl(mnl_settings, functionality)
-    P <- apollo_panelProd(P, apollo_inputs, functionality)
-    P <- apollo_avgInterDraws(P, apollo_inputs, functionality)
-    apollo_prepareProb(P, apollo_inputs, functionality)
-  }
+  apollo_beta          <- components$beta
+  apollo_fixed         <- components$fixed
+  apollo_randCoeff     <- components$randCoeff
+  apollo_probabilities <- components$probabilities
 
   ## STEP 7 – Validate inputs and estimate MMNL model -----------------------
   apollo_inputs <- apollo_validateInputs(
@@ -229,9 +245,15 @@ mmnl_model <- function(processed_path = "DATA/processed/modechoice_long.csv",
     apollo_draws    = apollo_draws,
     apollo_randCoeff= apollo_randCoeff
   )
+
   invisible(apollo_probabilities(apollo_beta, apollo_inputs, functionality = "validate"))
 
-  model <- apollo_estimate(apollo_beta, apollo_fixed, apollo_probabilities, apollo_inputs)
+  model <- apollo_estimate(
+    apollo_beta,
+    apollo_fixed,
+    apollo_probabilities,
+    apollo_inputs
+  )
 
   ## STEP 7 (continued) – Save Apollo output and custom diagnostics ----------
   apollo_modelOutput(model)
