@@ -80,12 +80,11 @@ candidate_paths <- c(
   file.path(.project_root, "modechoice_long.csv")
 )
 
-<<<<<<< HEAD
 hit <- which(file.exists(candidate_paths))
 if (length(hit) == 0) {
   cat("Checked paths:\n"); print(candidate_paths)
   stop("modechoice_long.csv not found. Please place it next to the script or in DATA/processed.")
-=======
+
   ### ========================================================
   ### STEP 2 – Locate data and load LONG dataset
   ### ========================================================
@@ -322,7 +321,6 @@ if (length(hit) == 0) {
     model        = mmnl_model,
     summary_path = summary_path
   ))
->>>>>>> 89aa726593553a14f30441be18cced45b9eff750
 }
 
 data_path <- candidate_paths[hit[1]]
