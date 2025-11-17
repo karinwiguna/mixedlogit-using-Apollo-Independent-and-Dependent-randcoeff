@@ -73,14 +73,6 @@ main <- function() {
   message(sprintf("==> Estimation finished. Summary written to %s", results$summary_path))
 }
 
-## STEP 3 – Handle runtime errors gracefully
-# Wrap the main routine in a guard that returns a non-zero exit code when the
-# pipeline fails.
-tryCatch(
-  main(),
-  error = function(e) {
-    # Keep top-level failure handling simple and compatible with R's condition API
-    message("Run failed: ", conditionMessage(e))
-    quit(status = 1L)
-  }
-)
+## STEP 3 – Execute pipeline
+# Run the orchestration routine directly so any Apollo errors surface clearly.
+main()
