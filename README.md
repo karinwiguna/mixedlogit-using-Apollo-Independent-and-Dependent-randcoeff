@@ -5,6 +5,10 @@ project contains data-preparation utilities, a baseline multinomial logit model,
 and an MMNL specification with independent random coefficients. A convenience
 runner script automates preprocessing and estimation from a single command.
 
+The workflow is intentionally minimal: build the processed long-format data,
+run the baseline MNL for a quick check, and estimate the mixed logit with
+independent random coefficients for time and cost.
+
 ## Dependencies
 
 Please install R (version 4.1 or newer is recommended) plus the following
@@ -67,4 +71,13 @@ The runner will copy the raw CSV into `DATA/`, generate the long-format dataset
 with `R00_Data Processing.R`, and estimate the MMNL model with
 `R_02_MMNL Independent.R`. Model outputs, diagnostic summaries, and Apollo log
 files are written to the `output/` directory.
+
+### Running from RStudio
+
+1. Open the `mixedlogit-debug` project folder in RStudio.
+2. Source `run_model.R` to build the processed data and estimate the MMNL model
+   in one step; or open `R_02_MMNL Independent.R` and run `mmnl_model()`
+   manually after ensuring `DATA/processed/modechoice_long.csv` exists.
+3. Baseline checks: you can also source `R_01_MNL Base Line.R` directly to
+   verify the non-mixed specification on the same processed dataset.
 

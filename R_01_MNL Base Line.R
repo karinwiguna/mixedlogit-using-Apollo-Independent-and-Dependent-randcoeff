@@ -43,8 +43,8 @@ apollo_control = list(
 get_script_path <- function(){
   p <- NULL
   if (requireNamespace("rstudioapi", quietly=TRUE)) {
-    if (tryCatch(rstudioapi::isAvailable(), error=function(cond) FALSE)) {
-      p <- tryCatch(rstudioapi::getActiveDocumentContext()$path, error=function(cond) NULL)
+    if (tryCatch(rstudioapi::isAvailable(), error=function(e) FALSE)) {
+      p <- tryCatch(rstudioapi::getActiveDocumentContext()$path, error=function(e) NULL)
     }
   }
   if (is.null(p) || !nzchar(p)) {
