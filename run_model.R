@@ -78,8 +78,9 @@ main <- function() {
 # pipeline fails.
 tryCatch(
   main(),
-  error = function(cond) {
-    message("Run failed: ", conditionMessage(cond))
+  error = function(e) {
+    # Keep top-level failure handling simple and compatible with R's condition API
+    message("Run failed: ", conditionMessage(e))
     quit(status = 1L)
   }
 )
