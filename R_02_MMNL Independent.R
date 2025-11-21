@@ -24,6 +24,8 @@ library(readr)
 library(dplyr)
 library(tidyr)   # optional — only needed if reshape or clean data again
 
+options(error = NULL)
+
 apollo_initialise()
 
 apollo_control <- list(
@@ -198,7 +200,7 @@ apollo_draws <- list(
 ### STEP 5 – Define random coefficients and utility functions
 ### ==========================================================
 
-apollo_randCoeff <- function(apollo_beta, apollo_inputs, ...){
+apollo_randCoeff <- function(apollo_beta, apollo_inputs){
   with(as.list(c(apollo_beta, apollo_inputs$draws)), {
     b_time <- mu_time + sigma_time * draws_time
     b_cost <- mu_cost + sigma_cost * draws_cost
@@ -209,7 +211,7 @@ apollo_randCoeff <- function(apollo_beta, apollo_inputs, ...){
   })
 }
 
-apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate", ...){
+apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "estimate"){
 
   apollo_attach(apollo_beta, apollo_inputs)
   on.exit(apollo_detach(apollo_beta, apollo_inputs), add = TRUE)
