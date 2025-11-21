@@ -19,11 +19,11 @@
 ### STEP 0 – Load packages and initialise Apollo
 ### ==========================================================
 
-## --- Hard reset error handler jadi bentuk yang benar
+## --- Hard-reset the error handler to the correct form
 options(error = function(e) {
-  # print dulu biar kelihatan kalau ada error beneran
+  # Print it first so we can see if there's a real error
   print(e)
-  stop(e)  # lempar lagi errornya
+  stop(e)  # Then rethrow the error
 })
 
 
