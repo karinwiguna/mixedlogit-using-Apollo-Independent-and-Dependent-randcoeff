@@ -24,49 +24,44 @@ check_packages <- function(pkgs) {
   }
 }
 
-## STEP 2 – Main orchestration --------------------------------------------------
-
+## STEP 2 – Run the orchestration routine
 main <- function() {
-  ## STEP 2.1 – Set working directory to repo root
+  ## STEP 2.1 – Align working directory with repository root
   repo_dir <- get_script_dir()
   setwd(repo_dir)
 
-  ## STEP 2.2 – Check required packages
-  required_pkgs <- c("apollo", "readr", "dplyr")
+  ## STEP 2.2 – Check required R packages
+  required_pkgs <- c("apollo")
   check_packages(required_pkgs)
 
-  ## STEP 2.3 – Ensure data file exists in expected location
+  ## STEP 2.3 – Copy raw data into DATA/ if needed
   data_dir <- file.path(repo_dir, "DATA")
   if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE)
 
-  raw_root   <- file.path(repo_dir, "apollo_modeChoiceData.csv")
-  raw_inDATA <- file.path(data_dir, "apollo_modeChoiceData.csv")
-
-  if (!file.exists(raw_root) && !file.exists(raw_inDATA)) {
-    stop("Unable to locate 'apollo_modeChoiceData.csv' ",
-         "in repo root or DATA/. Please add the file first.")
+  raw_source <- file.path(repo_dir, "apollo_modeChoiceData.csv")
+  raw_target <- file.path(data_dir, "apollo_modeChoiceData.csv")
+  if (!file.exists(raw_source)) {
+    stop("Unable to locate 'apollo_modeChoiceData.csv' in the repository root.")
   }
-
-  # If the main file exists in the root but is not yet in DATA, copy it as a backup.
-  if (file.exists(raw_root) && !file.exists(raw_inDATA)) {
-    file.copy(raw_root, raw_inDATA, overwrite = FALSE)
+  if (!file.exists(raw_target)) {
+    file.copy(raw_source, raw_target, overwrite = FALSE)
   }
 
   ## STEP 2.4 – Run baseline MNL (wide data)
-  message("==> Running R_01_MNL_Base Line.R")
-  source("R_01_MNL_Base Line.R", local = FALSE)
+  message("==> Running R_01_MNL Base Line.R")
+  source("R_01_MNL Base Line.R", local = FALSE)
 
   ## STEP 2.5 – Run MMNL independent (wide data)
-  message("==> Running R_02_MMNL_Independent.R")
-  source("R_02_MMNL_Independent.R", local = FALSE)
+  message("==> Running R_02_MMNL Independent.R")
+  source("R_02_MMNL Independent.R", local = FALSE)
 
   ## STEP 2.6 – Run MMNL dependent (wide data)
-  message("==> Running R_03_MMNL_Dependent.R")
-  source("R_03_MMNL_Dependent_Wide.R", local = FALSE)
+  message("==> Running R_03_MMNL Dependent.R")
+  source("R_03_MMNL Dependent.R", local = FALSE)
 
-  ## STEP 2.7 – Done
-  message("==> All models (R01, R02, R03) finished running.")
+  message("==> All models have finished running.")
 }
 
-## STEP 3 – Execute pipeline ----------------------------------------------------
+## STEP 3 – Execute pipeline
 main()
+
