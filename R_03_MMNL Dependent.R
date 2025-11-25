@@ -33,8 +33,8 @@
 ### ==========================================================
 
 # IMPORTANT:
-# - Jangan set options(error = ...) di script ini.
-# - Pastikan tidak ada error handler custom aktif.
+# - Do NOT set options(error = ...) in this script.
+# - Ensure no custom error handler is active.
 
 library(apollo)
 library(readr)
@@ -48,7 +48,7 @@ apollo_control <- list(
   indivID    = "ID",      # panel individual ID
   panelData  = TRUE,      # repeated choices per ID
   mixing     = TRUE,      # we use random coefficients
-  nCores     = 4          # keep 1 core dulu supaya debugging mudah
+  nCores     = 4          
 )
 
 
@@ -59,7 +59,7 @@ apollo_control <- list(
 get_script_path <- function(){
   p <- NULL
   
-  # RStudio: pakai active document path kalau ada
+  # RStudio: use the active document path if available
   if (requireNamespace("rstudioapi", quietly = TRUE)) {
     if (tryCatch(rstudioapi::isAvailable(), error = function(e) FALSE)) {
       p <- tryCatch(rstudioapi::getActiveDocumentContext()$path,
@@ -67,7 +67,7 @@ get_script_path <- function(){
     }
   }
   
-  # Kalau masih NULL, coba argumen --file (Rscript)
+  # If still NULL, try the --file argument (Rscript)
   if (is.null(p) || !nzchar(p)) {
     args    <- commandArgs(trailingOnly = FALSE)
     fileArg <- grep("^--file=", args, value = TRUE)
@@ -76,7 +76,7 @@ get_script_path <- function(){
     }
   }
   
-  # Fallback terakhir: current working directory
+  # Final fallback: the current working directory
   if (is.null(p) || !nzchar(p)) {
     p <- normalizePath(".", winslash = "/", mustWork = FALSE)
   }
@@ -91,7 +91,7 @@ get_script_path <- function(){
 cat(".script_dir   : ", .script_dir, "\n")
 cat(".project_root : ", .project_root, "\n")
 
-# Cari file wide di beberapa kemungkinan lokasi:
+# Search for the wide-format file in several possible locations:
 candidate_paths <- c(
   file.path(.script_dir,   "apollo_modeChoiceData.csv"),
   file.path(.project_root, "apollo_modeChoiceData.csv"),
@@ -123,7 +123,7 @@ stopifnot("choice" %in% names(database))
 ### STEP 2 – Define parameters (starting values) & fixed params
 ### ==========================================================
 
-# ASC_car dijadikan base (0), jadi tidak dimasukkan.
+# ASC_car is used as the base (0), so it is not included.
 # Random coefficients: b_time, b_cost (correlated normals)
 apollo_beta <- c(
   asc_bus    = -1.0,
@@ -139,7 +139,7 @@ apollo_beta <- c(
   rho_raw    =  0       # transformed to rho in (-1,1)
 )
 
-# Semua param kita estimasi (tidak ada yang fixed)
+# All parameters are estimated (none are fixed).
 apollo_fixed <- c()
 
 
@@ -147,11 +147,11 @@ apollo_fixed <- c()
 ### STEP 3 – Simulation draws for random coefficients
 ### ==========================================================
 
-# Menggunakan inter-individual (panel) draws
+# Using inter-individual (panel) draws.
 apollo_draws <- list(
   interDrawsType = "sobol",                        # Sobol draws (manual section 6)
-  interNDraws    = 200,                            # bisa dinaikkan nanti (contoh: 500, 1000)
-  interNormDraws = c("draws_time", "draws_cost")   # dua standard normal draws
+  interNDraws    = 200,                            # This can be increased later (e.g., 500 or 1000)
+  interNormDraws = c("draws_time", "draws_cost")   # two standard normal draws
 )
 
 
@@ -159,8 +159,8 @@ apollo_draws <- list(
 ### STEP 4 – Random coefficients with correlation
 ### ==========================================================
 
-# b_time dan b_cost ~ bivariate normal dengan korelasi rho.
-# Implementasi standard (sesuai Train dan manual Apollo):
+# b_time and b_cost ~ bivariate normal with correlation rho.
+# Standard implementation (following Train and the Apollo manual):
 #   z1 = draws_time ~ N(0,1)
 #   z2 = draws_cost ~ N(0,1) independent
 #   b_time = mu_time + sigma_time * z1
@@ -168,7 +168,7 @@ apollo_draws <- list(
 
 apollo_randCoeff <- function(apollo_beta, apollo_inputs){
   
-  # akses parameter (mu, sigma, rho_raw) dan draws (draws_time, draws_cost)
+  # access parameters (mu, sigma, rho_raw) and the draws (draws_time, draws_cost)
   par   <- as.list(apollo_beta)
   draws <- apollo_inputs$draws
   
@@ -177,7 +177,7 @@ apollo_randCoeff <- function(apollo_beta, apollo_inputs){
   sigma_time <- par$sigma_time
   sigma_cost <- par$sigma_cost
   
-  # transform rho_raw --> rho in (-1,1) pakai fungsi logistic
+  # transform rho_raw --> rho in (-1,1) using the logistic function
   rho_raw <- par$rho_raw
   rho     <- 2 * plogis(rho_raw) - 1   # rho = 2*logit^-1(rho_raw) - 1
   
@@ -264,7 +264,6 @@ apollo_probabilities <- function(apollo_beta, apollo_inputs, functionality = "es
   
   return(P)
 }
-
 
 ### ==========================================================
 ### STEP 6 – Validate inputs
